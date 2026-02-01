@@ -1,0 +1,9 @@
+{
+  "name": "nodebb-plugin-dislike-notifier",
+  "version": "1.1.0",
+  "description": "שולח התראה למשתמש כאשר הוא נותן 'דיסלייק' למשתמש אחר",
+  "main": "./library.js",
+  "nbbpm": {
+    "compatibility": "^3.0.0 || ^4.0.0"
+  }
+}
