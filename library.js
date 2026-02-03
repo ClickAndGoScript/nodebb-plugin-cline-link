@@ -10,26 +10,32 @@ const BLACKLISTED_PARAMS = [
     'linkCode', 'ref_', 'creative', 'camp', 'collection_id'
 ];
 
-// הגדרת חוקי הניקוי
+/**
+ * רג'קס משופר לאיתור כתובות URL:
+ * הוא מחפש תווים שאינם רווח, אבל עוצר לפני סוגריים סוגרים, נקודה או פסיק בסוף הכתובת
+ */
+const URL_REGEX_SUFFIX = /[^\s)]+(?=[^.,;!?:>\s)]|(?:\s|$))/g;
+
 const CLEANING_RULES = [
     {
-        name: 'Short Links', // קישורים מקוצרים שחייבים פתיחה
-        regex: /https?:\/\/(?:s\.click\.aliexpress\.com|a\.aliexpress\.com|temu\.to|share\.temu\.com|amzn\.to|ebay\.to)\/\S+/g,
+        name: 'Short Links',
+        // שימוש ב- [^\s)]+ במקום \S+ כדי לא לכלול סוגר של Markdown
+        regex: /https?:\/\/(?:s\.click\.aliexpress\.com|a\.aliexpress\.com|temu\.to|share\.temu\.com|amzn\.to|ebay\.to)\/[^\s)]+/g,
         resolve: true
     },
     {
         name: 'Temu Direct',
-        regex: /https?:\/\/(?:\w+\.)?temu\.com\/\S+/g,
+        regex: /https?:\/\/(?:\w+\.)?temu\.com\/[^\s)]+/g,
         resolve: false
     },
     {
         name: 'AliExpress Direct',
-        regex: /https?:\/\/(?:\w+\.)?aliexpress\.com\/item\/\d+\.html\S*/g,
+        regex: /https?:\/\/(?:\w+\.)?aliexpress\.com\/item\/\d+\.html[^\s)]*/g,
         resolve: false
     },
     {
         name: 'Amazon Direct',
-        regex: /https?:\/\/(?:\w+\.)?amazon\.(?:com|co\.uk|de|it|fr|es|ca)\/(?:dp|gp\/product)\/[\w\d]+\S*/g,
+        regex: /https?:\/\/(?:\w+\.)?amazon\.(?:com|co\.uk|de|it|fr|es|ca)\/(?:dp|gp\/product)\/[\w\d]+[^\s)]*/g,
         resolve: false
     }
 ];
@@ -39,13 +45,13 @@ const CLEANING_RULES = [
  */
 function stripAffiliateParameters(url) {
     try {
-        const urlObj = new URL(url);
+        // ניקוי תווים מיותרים שעלולים להידבק לסוף ה-URL לפני הניתוח
+        const cleanUrlStr = url.replace(/[).,;!]+$/, '');
+        const urlObj = new URL(cleanUrlStr);
         const params = urlObj.searchParams;
 
-        // הסרת פרמטרים מרשימת הבלוק
         BLACKLISTED_PARAMS.forEach(param => params.delete(param));
         
-        // הסרת כל פרמטר שמתחיל ב- _x_ (נפוץ ב-Temu)
         const keys = Array.from(params.keys());
         keys.forEach(key => {
             if (key.startsWith('_x_')) {
@@ -53,21 +59,12 @@ function stripAffiliateParameters(url) {
             }
         });
 
-        // אם זה קישור מוצר רגיל (לא דף נחיתה מיוחד), אפשר לנקות הכל
-        // אבל בשביל דפי kuiper וכו', נשאיר את מה שנותר
-        if (urlObj.pathname.includes('/item/') || urlObj.pathname.includes('/dp/')) {
-            // במוצרים רגילים אפשר להחמיר יותר אם רוצים
-        }
-
         return urlObj.toString();
     } catch (e) {
         return url;
     }
 }
 
-/**
- * פונקציה שמנסה לגלות את הכתובת הסופית של קישור מקוצר
- */
 async function resolveShortLink(url) {
     try {
         const response = await fetch(url, {
@@ -80,7 +77,6 @@ async function resolveShortLink(url) {
         });
         return response.url;
     } catch (err) {
-        console.error(`[cline-links] Failed to resolve: ${url}`, err.message);
         return url;
     }
 }
@@ -97,21 +93,26 @@ plugin.cleanLinks = async function (hookData) {
         const matches = content.match(rule.regex);
         if (!matches) continue;
 
-        const uniqueMatches = [...new Set(matches)];
+        // הסרת כפילויות ומיון מהארוך לקצר כדי למנוע החלפות חלקיות
+        const uniqueMatches = [...new Set(matches)].sort((a, b) => b.length - a.length);
 
         for (const matchedUrl of uniqueMatches) {
-            let finalUrl = matchedUrl;
-
-            if (rule.resolve) {
-                finalUrl = await resolveShortLink(matchedUrl);
+            // טיפול במקרה שהרג'קס תפס סוגר בסוף (לביטחון נוסף)
+            let actualUrl = matchedUrl;
+            if (actualUrl.endsWith(')')) {
+                actualUrl = actualUrl.slice(0, -1);
             }
 
-            // ניקוי סלקטיבי של פרמטרים
+            let finalUrl = actualUrl;
+            if (rule.resolve) {
+                finalUrl = await resolveShortLink(actualUrl);
+            }
+
             const cleanUrl = stripAffiliateParameters(finalUrl);
 
-            if (cleanUrl !== matchedUrl) {
-                // החלפה בטוחה של הקישור בטקסט
-                content = content.split(matchedUrl).join(cleanUrl);
+            if (cleanUrl !== actualUrl) {
+                // שימוש ב-replace ספציפי כדי לא לפגוע בטקסט מסביב
+                content = content.split(actualUrl).join(cleanUrl);
                 modified = true;
             }
         }
