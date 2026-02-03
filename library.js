@@ -20,11 +20,6 @@ const CLEANING_RULES = [
         resolve: true
     },
     {
-        name: 'Temu Direct',
-        regex: /https?:\/\/(?:\w+\.)?temu\.com\/[\w\-\/]+\.html\S*/g,
-        resolve: false
-    },
-    {
         name: 'Amazon Short',
         regex: /https?:\/\/amzn\.to\/\S+/g,
         resolve: true
