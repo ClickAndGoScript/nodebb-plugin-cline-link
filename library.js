@@ -2,36 +2,38 @@
 
 const plugin = {};
 
-// הגדרת חוקי הניקוי לכל אתר
+// הגדרת חוקי הניקוי לכל אתר - גרסה מתוקנת (מונעת מחיקת סוגריים)
 const CLEANING_RULES = [
     {
         name: 'AliExpress Short',
-        regex: /https?:\/\/(?:s\.click|a)\.aliexpress\.com\/\S+/g,
-        resolve: true // קישור מקוצר דורש פתיחה בשרת
+        // הוחלף \S+ ב-[^\s)]+
+        regex: /https?:\/\/(?:s\.click|a)\.aliexpress\.com\/[^\s)]+/g,
+        resolve: true
     },
     {
         name: 'AliExpress Direct',
-        regex: /https?:\/\/(?:\w+\.)?aliexpress\.com\/item\/\d+\.html\S*/g,
-        resolve: false // קישור ישיר - רק לנקות פרמטרים
+        // הוחלף \S* ב-[^\s)]*
+        regex: /https?:\/\/(?:\w+\.)?aliexpress\.com\/item\/\d+\.html[^\s)]*/g,
+        resolve: false
     },
     {
         name: 'Temu Short',
-        regex: /https?:\/\/(?:temu\.to|share\.temu\.com)\/\S+/g,
+        regex: /https?:\/\/(?:temu\.to|share\.temu\.com)\/[^\s)]+/g,
         resolve: true
     },
     {
         name: 'Amazon Short',
-        regex: /https?:\/\/amzn\.to\/\S+/g,
+        regex: /https?:\/\/amzn\.to\/[^\s)]+/g,
         resolve: true
     },
     {
         name: 'Amazon Direct',
-        regex: /https?:\/\/(?:\w+\.)?amazon\.(?:com|co\.uk|de|it|fr|es|ca)\/(?:dp|gp\/product)\/[\w\d]+\S*/g,
+        regex: /https?:\/\/(?:\w+\.)?amazon\.(?:com|co\.uk|de|it|fr|es|ca)\/(?:dp|gp\/product)\/[\w\d]+[^\s)]*/g,
         resolve: false
     },
     {
         name: 'eBay Short',
-        regex: /https?:\/\/ebay\.to\/\S+/g,
+        regex: /https?:\/\/ebay\.to\/[^\s)]+/g,
         resolve: true
     }
 ];
