@@ -2,52 +2,63 @@
 
 const plugin = {};
 
-// הגדרת חוקי הניקוי לכל אתר - גרסה מתוקנת (מונעת מחיקת סוגריים)
+// רשימת פרמטרים שמהווים מזהי שותפים או מעקב שיש להסיר
+const BLACKLISTED_PARAMS = [
+    '_x_cid', '_x_ads_channel', '_x_campaign', '_x_vst_scene', 
+    'refer_share_id', 'refer_share_uid', 'invite_code', 
+    'aff_id', 'aff_platform', 'aff_trace_key', 'tag', 'ref',
+    'linkCode', 'ref_', 'creative', 'camp', 'collection_id'
+];
+
+// הגדרת חוקי הניקוי
 const CLEANING_RULES = [
     {
-        name: 'AliExpress Short',
-        // הוחלף \S+ ב-[^\s)]+
-        regex: /https?:\/\/(?:s\.click|a)\.aliexpress\.com\/[^\s)]+/g,
+        name: 'Short Links', // קישורים מקוצרים שחייבים פתיחה
+        regex: /https?:\/\/(?:s\.click\.aliexpress\.com|a\.aliexpress\.com|temu\.to|share\.temu\.com|amzn\.to|ebay\.to)\/\S+/g,
         resolve: true
+    },
+    {
+        name: 'Temu Direct',
+        regex: /https?:\/\/(?:\w+\.)?temu\.com\/\S+/g,
+        resolve: false
     },
     {
         name: 'AliExpress Direct',
-        // הוחלף \S* ב-[^\s)]*
-        regex: /https?:\/\/(?:\w+\.)?aliexpress\.com\/item\/\d+\.html[^\s)]*/g,
+        regex: /https?:\/\/(?:\w+\.)?aliexpress\.com\/item\/\d+\.html\S*/g,
         resolve: false
-    },
-    {
-        name: 'Temu Short',
-        regex: /https?:\/\/(?:temu\.to|share\.temu\.com)\/[^\s)]+/g,
-        resolve: true
-    },
-    {
-        name: 'Amazon Short',
-        regex: /https?:\/\/amzn\.to\/[^\s)]+/g,
-        resolve: true
     },
     {
         name: 'Amazon Direct',
-        regex: /https?:\/\/(?:\w+\.)?amazon\.(?:com|co\.uk|de|it|fr|es|ca)\/(?:dp|gp\/product)\/[\w\d]+[^\s)]*/g,
+        regex: /https?:\/\/(?:\w+\.)?amazon\.(?:com|co\.uk|de|it|fr|es|ca)\/(?:dp|gp\/product)\/[\w\d]+\S*/g,
         resolve: false
-    },
-    {
-        name: 'eBay Short',
-        regex: /https?:\/\/ebay\.to\/[^\s)]+/g,
-        resolve: true
     }
 ];
 
 /**
- * פונקציה שמנקה את ה-URL מכל ה-Query Parameters
+ * מנקה פרמטרים ספציפיים מתוך ה-URL
  */
-function stripParameters(url) {
+function stripAffiliateParameters(url) {
     try {
         const urlObj = new URL(url);
-        // עבור אמזון, לפעמים הקישור הנקי דורש את ה-Path עד ה-ASIN
-        // ברוב האתרים (עלי, טמו) איפוס ה-search וה-hash מספיק
-        urlObj.search = '';
-        urlObj.hash = '';
+        const params = urlObj.searchParams;
+
+        // הסרת פרמטרים מרשימת הבלוק
+        BLACKLISTED_PARAMS.forEach(param => params.delete(param));
+        
+        // הסרת כל פרמטר שמתחיל ב- _x_ (נפוץ ב-Temu)
+        const keys = Array.from(params.keys());
+        keys.forEach(key => {
+            if (key.startsWith('_x_')) {
+                params.delete(key);
+            }
+        });
+
+        // אם זה קישור מוצר רגיל (לא דף נחיתה מיוחד), אפשר לנקות הכל
+        // אבל בשביל דפי kuiper וכו', נשאיר את מה שנותר
+        if (urlObj.pathname.includes('/item/') || urlObj.pathname.includes('/dp/')) {
+            // במוצרים רגילים אפשר להחמיר יותר אם רוצים
+        }
+
         return urlObj.toString();
     } catch (e) {
         return url;
@@ -65,7 +76,7 @@ async function resolveShortLink(url) {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36'
             },
-            signal: AbortSignal.timeout(5000) // הגבלת זמן ל-5 שניות כדי לא לתקוע את השרת
+            signal: AbortSignal.timeout(5000)
         });
         return response.url;
     } catch (err) {
@@ -91,16 +102,15 @@ plugin.cleanLinks = async function (hookData) {
         for (const matchedUrl of uniqueMatches) {
             let finalUrl = matchedUrl;
 
-            // 1. אם החוק דורש פתיחה (קישור מקוצר)
             if (rule.resolve) {
                 finalUrl = await resolveShortLink(matchedUrl);
             }
 
-            // 2. ניקוי פרמטרים (תמיד מנקים בסוף כדי להיות בטוחים)
-            const cleanUrl = stripParameters(finalUrl);
+            // ניקוי סלקטיבי של פרמטרים
+            const cleanUrl = stripAffiliateParameters(finalUrl);
 
-            // 3. החלפה בתוכן (רק אם הקישור באמת השתנה)
             if (cleanUrl !== matchedUrl) {
+                // החלפה בטוחה של הקישור בטקסט
                 content = content.split(matchedUrl).join(cleanUrl);
                 modified = true;
             }
