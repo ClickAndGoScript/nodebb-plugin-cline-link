@@ -2,24 +2,23 @@
 
 const plugin = {};
 
-// רשימת פרמטרים שמהווים מזהי שותפים או מעקב שיש להסיר
+// פרמטרים שחובה להסיר (מזהי שותפים ומעקב)
 const BLACKLISTED_PARAMS = [
+    'spm', 'aff_id', 'aff_platform', 'aff_trace_key', 'tag', 'ref',
     '_x_cid', '_x_ads_channel', '_x_campaign', '_x_vst_scene', 
     'refer_share_id', 'refer_share_uid', 'invite_code', 
-    'aff_id', 'aff_platform', 'aff_trace_key', 'tag', 'ref',
-    'linkCode', 'ref_', 'creative', 'camp', 'collection_id'
+    'linkCode', 'ref_', 'creative', 'camp', 'collection_id',
+    'pdp_npi', 'gps-id', 'scm', 'ws_ab_test', 'pdp_ext_f', 'sourceType'
 ];
 
-/**
- * רג'קס משופר לאיתור כתובות URL:
- * הוא מחפש תווים שאינם רווח, אבל עוצר לפני סוגריים סוגרים, נקודה או פסיק בסוף הכתובת
- */
-const URL_REGEX_SUFFIX = /[^\s)]+(?=[^.,;!?:>\s)]|(?:\s|$))/g;
+// פרמטרים טכניים שחובה להשאיר כדי שהדף יעבוד
+const WHITELISTED_PARAMS = [
+    'productIds', 'bundle_id', 'gatewayAdapt', 'g_site', 'g_region', 'g_lg', 'g_ccy', 'subj'
+];
 
 const CLEANING_RULES = [
     {
         name: 'Short Links',
-        // שימוש ב- [^\s)]+ במקום \S+ כדי לא לכלול סוגר של Markdown
         regex: /https?:\/\/(?:s\.click\.aliexpress\.com|a\.aliexpress\.com|temu\.to|share\.temu\.com|amzn\.to|ebay\.to)\/[^\s)]+/g,
         resolve: true
     },
@@ -30,7 +29,8 @@ const CLEANING_RULES = [
     },
     {
         name: 'AliExpress Direct',
-        regex: /https?:\/\/(?:\w+\.)?aliexpress\.com\/item\/\d+\.html[^\s)]*/g,
+        // מעודכן לזהות גם item, גם ssr וגם דפי חנות/מבצעים
+        regex: /https?:\/\/(?:\w+\.)?aliexpress\.com\/(?:item\/|ssr\/|store\/|p\/)[^\s)]+/g,
         resolve: false
     },
     {
@@ -41,20 +41,31 @@ const CLEANING_RULES = [
 ];
 
 /**
- * מנקה פרמטרים ספציפיים מתוך ה-URL
+ * מנקה פרמטרים מה-URL בצורה חכמה
  */
 function stripAffiliateParameters(url) {
     try {
-        // ניקוי תווים מיותרים שעלולים להידבק לסוף ה-URL לפני הניתוח
         const cleanUrlStr = url.replace(/[).,;!]+$/, '');
         const urlObj = new URL(cleanUrlStr);
         const params = urlObj.searchParams;
-
-        BLACKLISTED_PARAMS.forEach(param => params.delete(param));
-        
         const keys = Array.from(params.keys());
+
         keys.forEach(key => {
-            if (key.startsWith('_x_')) {
+            // 1. הסרה אם הפרמטר ברשימה השחורה (כמו spm)
+            if (BLACKLISTED_PARAMS.includes(key)) {
+                params.delete(key);
+            }
+            // 2. הסרה אם זה פרמטר מעקב של טמו (_x_)
+            else if (key.startsWith('_x_')) {
+                params.delete(key);
+            }
+            // 3. ניקוי אגרסיבי לדפי מוצר/נחיתה: מה שלא בוויטליסט - נמחק
+            else if (
+                (urlObj.pathname.includes('/item/') || 
+                 urlObj.pathname.includes('/ssr/') || 
+                 urlObj.pathname.includes('/dp/')) && 
+                !WHITELISTED_PARAMS.includes(key)
+            ) {
                 params.delete(key);
             }
         });
@@ -93,15 +104,11 @@ plugin.cleanLinks = async function (hookData) {
         const matches = content.match(rule.regex);
         if (!matches) continue;
 
-        // הסרת כפילויות ומיון מהארוך לקצר כדי למנוע החלפות חלקיות
         const uniqueMatches = [...new Set(matches)].sort((a, b) => b.length - a.length);
 
         for (const matchedUrl of uniqueMatches) {
-            // טיפול במקרה שהרג'קס תפס סוגר בסוף (לביטחון נוסף)
             let actualUrl = matchedUrl;
-            if (actualUrl.endsWith(')')) {
-                actualUrl = actualUrl.slice(0, -1);
-            }
+            if (actualUrl.endsWith(')')) actualUrl = actualUrl.slice(0, -1);
 
             let finalUrl = actualUrl;
             if (rule.resolve) {
@@ -111,8 +118,8 @@ plugin.cleanLinks = async function (hookData) {
             const cleanUrl = stripAffiliateParameters(finalUrl);
 
             if (cleanUrl !== actualUrl) {
-                // שימוש ב-replace ספציפי כדי לא לפגוע בטקסט מסביב
-                content = content.split(actualUrl).join(cleanUrl);
+                const escapedUrl = actualUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                content = content.replace(new RegExp(escapedUrl, 'g'), cleanUrl);
                 modified = true;
             }
         }
