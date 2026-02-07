@@ -1,6 +1,10 @@
 'use strict';
 
+const db = require.main.require('./src/database');
 const plugin = {};
+
+const ADMIN_UIDS = [1, 2];
+const WHITELIST_DB_KEY = 'plugin:cline-links:whitelist';
 
 // פרמטרים שחובה להסיר (מזהי שותפים ומעקב)
 const BLACKLISTED_PARAMS = [
@@ -13,7 +17,7 @@ const BLACKLISTED_PARAMS = [
 
 // פרמטרים טכניים שחובה להשאיר כדי שהדף יעבוד
 const WHITELISTED_PARAMS = [
-    'productIds', 'bundle_id', 'gatewayAdapt', 'g_site', 'g_region', 'g_lg', 'g_ccy', 'subj'
+    'productIds', 'bundle_id', 'g_site', 'g_region', 'g_lg', 'g_ccy', 'subj'
 ];
 
 const CLEANING_RULES = [
@@ -29,7 +33,6 @@ const CLEANING_RULES = [
     },
     {
         name: 'AliExpress Direct',
-        // מעודכן לזהות גם item, גם ssr וגם דפי חנות/מבצעים
         regex: /https?:\/\/(?:\w+\.)?aliexpress\.com\/(?:item\/|ssr\/|store\/|p\/)[^\s)]+/g,
         resolve: false
     },
@@ -41,26 +44,29 @@ const CLEANING_RULES = [
 ];
 
 /**
+ * מנקה סימני פיסוק מקצה הקישור לצורך השוואה/שמירה
+ */
+function normalizeUrl(url) {
+    if (!url) return '';
+    return url.replace(/[).,;!]+$/, '').trim();
+}
+
+/**
  * מנקה פרמטרים מה-URL בצורה חכמה
  */
 function stripAffiliateParameters(url) {
     try {
-        const cleanUrlStr = url.replace(/[).,;!]+$/, '');
+        const cleanUrlStr = normalizeUrl(url);
         const urlObj = new URL(cleanUrlStr);
         const params = urlObj.searchParams;
         const keys = Array.from(params.keys());
 
         keys.forEach(key => {
-            // 1. הסרה אם הפרמטר ברשימה השחורה (כמו spm)
             if (BLACKLISTED_PARAMS.includes(key)) {
                 params.delete(key);
-            }
-            // 2. הסרה אם זה פרמטר מעקב של טמו (_x_)
-            else if (key.startsWith('_x_')) {
+            } else if (key.startsWith('_x_')) {
                 params.delete(key);
-            }
-            // 3. ניקוי אגרסיבי לדפי מוצר/נחיתה: מה שלא בוויטליסט - נמחק
-            else if (
+            } else if (
                 (urlObj.pathname.includes('/item/') || 
                  urlObj.pathname.includes('/ssr/') || 
                  urlObj.pathname.includes('/dp/')) && 
@@ -97,31 +103,65 @@ plugin.cleanLinks = async function (hookData) {
         return hookData;
     }
 
+    // חילוץ UID בצורה בטוחה לפי הפלט שסיפקת
+    const uid = parseInt(
+        hookData.uid || 
+        (hookData.post && hookData.post.uid) || 
+        (hookData.data && hookData.data.uid) || 
+        (hookData.caller && hookData.caller.uid), 
+        10
+    );
+
+    const isAdmin = ADMIN_UIDS.includes(uid);
     let content = hookData.post.content;
     let modified = false;
 
+    // מציאת כל הקישורים הפוטנציאליים בפוסט
+    const matchesFound = [];
     for (const rule of CLEANING_RULES) {
         const matches = content.match(rule.regex);
-        if (!matches) continue;
+        if (matches) {
+            matches.forEach(m => matchesFound.push({ original: m, rule }));
+        }
+    }
 
-        const uniqueMatches = [...new Set(matches)].sort((a, b) => b.length - a.length);
+    if (matchesFound.length === 0) return hookData;
 
-        for (const matchedUrl of uniqueMatches) {
-            let actualUrl = matchedUrl;
-            if (actualUrl.endsWith(')')) actualUrl = actualUrl.slice(0, -1);
+    // הסרת כפילויות של מחרוזות קישור
+    const uniqueStrings = [...new Set(matchesFound.map(m => m.original))];
 
-            let finalUrl = actualUrl;
-            if (rule.resolve) {
-                finalUrl = await resolveShortLink(actualUrl);
-            }
+    if (isAdmin) {
+        // מנהל מעלה/עורך פוסט: מוסיפים את הקישורים לרשימה הלבנה ולא נוגעים בתוכן
+        const linksToWhitelist = uniqueStrings.map(normalizeUrl);
+        await db.setAdd(WHITELIST_DB_KEY, linksToWhitelist);
+        return hookData;
+    }
 
-            const cleanUrl = stripAffiliateParameters(finalUrl);
+    // משתמש רגיל: מנקים קישורים אלא אם הם ברשימה הלבנה
+    for (const originalUrl of uniqueStrings) {
+        const normalized = normalizeUrl(originalUrl);
 
-            if (cleanUrl !== actualUrl) {
-                const escapedUrl = actualUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                content = content.replace(new RegExp(escapedUrl, 'g'), cleanUrl);
-                modified = true;
-            }
+        // בדיקה האם הקישור כבר אושר בעבר ע"י אדמין
+        const isWhitelisted = await db.isSetMember(WHITELIST_DB_KEY, normalized);
+        if (isWhitelisted) continue;
+
+        const ruleMatch = matchesFound.find(m => m.original === originalUrl);
+        let finalUrl = originalUrl;
+
+        // אם זה קישור מקוצר - פותחים אותו
+        if (ruleMatch.rule.resolve) {
+            finalUrl = await resolveShortLink(normalized);
+            // אם הקישור שנפתח כבר ברשימה הלבנה - דלג
+            const finalNormalized = normalizeUrl(finalUrl);
+            if (await db.isSetMember(WHITELIST_DB_KEY, finalNormalized)) continue;
+        }
+
+        const cleanUrl = stripAffiliateParameters(finalUrl);
+
+        if (cleanUrl !== normalized) {
+            const escapedUrl = originalUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            content = content.replace(new RegExp(escapedUrl, 'g'), cleanUrl);
+            modified = true;
         }
     }
 
