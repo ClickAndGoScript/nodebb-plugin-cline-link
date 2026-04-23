@@ -1,8 +1,8 @@
 {
   "name": "nodebb-plugin-cline-links",
-  "version": "1.3.0",
-  "description": "מנקה קישורים שיתופיים של אליאקספרס והופך אותם לקישורים נקיים",
-  "main": "./library.js",
+  "description": "מנקה קישורים וממיר קישורי אליאקספרס לשיתופיים",
+  "version": "1.5.0",
+  "library": "./library.js",
   "nbbpm": {
     "compatibility": "^3.0.0 || ^4.0.0"
   }

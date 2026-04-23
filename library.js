@@ -1,6 +1,8 @@
 'use strict';
 
 const db = require.main.require('./src/database');
+const meta = require.main.require('./src/meta');
+const AliExpressService = require('./aliexpress');
 const plugin = {};
 
 const ADMIN_UIDS = [1, 2];
@@ -9,8 +11,8 @@ const WHITELIST_DB_KEY = 'plugin:cline-links:whitelist';
 // פרמטרים שחובה להסיר (מזהי שותפים ומעקב)
 const BLACKLISTED_PARAMS = [
     'spm', 'aff_id', 'aff_platform', 'aff_trace_key', 'tag', 'ref',
-    '_x_cid', '_x_ads_channel', '_x_campaign', '_x_vst_scene', 
-    'refer_share_id', 'refer_share_uid', 'invite_code', 
+    '_x_cid', '_x_ads_channel', '_x_campaign', '_x_vst_scene',
+    'refer_share_id', 'refer_share_uid', 'invite_code',
     'linkCode', 'ref_', 'creative', 'camp', 'collection_id',
     'pdp_npi', 'gps-id', 'scm', 'ws_ab_test', 'pdp_ext_f', 'sourceType'
 ];
@@ -24,24 +26,53 @@ const CLEANING_RULES = [
     {
         name: 'Short Links',
         regex: /https?:\/\/(?:s\.click\.aliexpress\.com|a\.aliexpress\.com|temu\.to|share\.temu\.com|amzn\.to|ebay\.to)\/[^\s)]+/g,
-        resolve: true
+        resolve: true,
+        convert: true
     },
     {
         name: 'Temu Direct',
         regex: /https?:\/\/(?:\w+\.)?temu\.com\/[^\s)]+/g,
-        resolve: false
+        resolve: false,
+        convert: false
     },
     {
         name: 'AliExpress Direct',
         regex: /https?:\/\/(?:\w+\.)?aliexpress\.com\/(?:item\/|ssr\/|store\/|p\/)[^\s)]+/g,
-        resolve: false
+        resolve: false,
+        convert: true
     },
     {
         name: 'Amazon Direct',
         regex: /https?:\/\/(?:\w+\.)?amazon\.(?:com|co\.uk|de|it|fr|es|ca)\/(?:dp|gp\/product)\/[\w\d]+[^\s)]*/g,
-        resolve: false
+        resolve: false,
+        convert: false
     }
 ];
+
+plugin.init = async function (params) {
+    const { router, middleware } = params;
+
+    // הגדרת הנתיבים לדף הניהול
+    router.get('/admin/plugins/cline-links', middleware.admin.buildHeader, plugin.renderAdmin);
+    router.get('/api/admin/plugins/cline-links', plugin.renderAdmin);
+};
+
+plugin.renderAdmin = function (req, res) {
+    // השם כאן חייב להתאים לנתיב של ה-tpl בתוך templates/admin/plugins/
+    res.render('admin/plugins/cline-links', {
+        title: 'Cline Links & Affiliate'
+    });
+};
+
+plugin.addAdminNavigation = async function (header) {
+    header.plugins.push({
+        route: '/plugins/cline-links',
+        icon: 'fa-shopping-cart',
+        name: 'Cline Links'
+    });
+    return header;
+};
+
 
 /**
  * מנקה סימני פיסוק מקצה הקישור לצורך השוואה/שמירה
@@ -67,9 +98,9 @@ function stripAffiliateParameters(url) {
             } else if (key.startsWith('_x_')) {
                 params.delete(key);
             } else if (
-                (urlObj.pathname.includes('/item/') || 
-                 urlObj.pathname.includes('/ssr/') || 
-                 urlObj.pathname.includes('/dp/')) && 
+                (urlObj.pathname.includes('/item/') ||
+                    urlObj.pathname.includes('/ssr/') ||
+                    urlObj.pathname.includes('/dp/')) &&
                 !WHITELISTED_PARAMS.includes(key)
             ) {
                 params.delete(key);
@@ -103,20 +134,21 @@ plugin.cleanLinks = async function (hookData) {
         return hookData;
     }
 
-    // חילוץ UID בצורה בטוחה לפי הפלט שסיפקת
+    // 1. טעינת הגדרות וזיהוי משתמש
+    const settings = await meta.settings.get('cline-links');
+    const enabled = settings.enabled === 'on';
+    
     const uid = parseInt(
         hookData.uid || 
         (hookData.post && hookData.post.uid) || 
-        (hookData.data && hookData.data.uid) || 
         (hookData.caller && hookData.caller.uid), 
         10
     );
 
     const isAdmin = ADMIN_UIDS.includes(uid);
     let content = hookData.post.content;
-    let modified = false;
 
-    // מציאת כל הקישורים הפוטנציאליים בפוסט
+    // 2. מציאת כל הקישורים שמתאימים לחוקים
     const matchesFound = [];
     for (const rule of CLEANING_RULES) {
         const matches = content.match(rule.regex);
@@ -127,40 +159,52 @@ plugin.cleanLinks = async function (hookData) {
 
     if (matchesFound.length === 0) return hookData;
 
-    // הסרת כפילויות של מחרוזות קישור
     const uniqueStrings = [...new Set(matchesFound.map(m => m.original))];
 
+    // 3. טיפול במנהל מערכת (הוספה לרשימה לבנה ודילוג)
     if (isAdmin) {
-        // מנהל מעלה/עורך פוסט: מוסיפים את הקישורים לרשימה הלבנה ולא נוגעים בתוכן
         const linksToWhitelist = uniqueStrings.map(normalizeUrl);
         await db.setAdd(WHITELIST_DB_KEY, linksToWhitelist);
         return hookData;
     }
 
-    // משתמש רגיל: מנקים קישורים אלא אם הם ברשימה הלבנה
+    // 4. עיבוד קישורים למשתמש רגיל
+    let modified = false;
+    const aliService = new AliExpressService(settings);
+
     for (const originalUrl of uniqueStrings) {
         const normalized = normalizeUrl(originalUrl);
 
-        // בדיקה האם הקישור כבר אושר בעבר ע"י אדמין
-        const isWhitelisted = await db.isSetMember(WHITELIST_DB_KEY, normalized);
-        if (isWhitelisted) continue;
+        // בדיקה אם הקישור אושר ע"י אדמין בעבר
+        if (await db.isSetMember(WHITELIST_DB_KEY, normalized)) continue;
 
-        const ruleMatch = matchesFound.find(m => m.original === originalUrl);
-        let finalUrl = originalUrl;
+        const match = matchesFound.find(m => m.original === originalUrl);
+        let currentUrl = normalized;
 
-        // אם זה קישור מקוצר - פותחים אותו
-        if (ruleMatch.rule.resolve) {
-            finalUrl = await resolveShortLink(normalized);
-            // אם הקישור שנפתח כבר ברשימה הלבנה - דלג
-            const finalNormalized = normalizeUrl(finalUrl);
-            if (await db.isSetMember(WHITELIST_DB_KEY, finalNormalized)) continue;
+        // שלב א': פתיחת קישורים מקוצרים (Resolve)
+        if (match.rule.resolve) {
+            currentUrl = await resolveShortLink(currentUrl);
+            // בדיקה נוספת אחרי הפתיחה אם הקישור המלא ברשימה הלבנה
+            if (await db.isSetMember(WHITELIST_DB_KEY, normalizeUrl(currentUrl))) continue;
         }
 
-        const cleanUrl = stripAffiliateParameters(finalUrl);
+        // שלב ב': ניקוי פרמטרים (Stripping)
+        // מקבלים קישור נקי לחלוטין ללא מזהי מעקב
+        let finalUrl = stripAffiliateParameters(currentUrl);
 
-        if (cleanUrl !== normalized) {
+        // שלב ג': המרה לקישור שותפים אישי (AliExpress Affiliate)
+        // השלב הזה רץ רק אם ההגדרה מופעלת וזה קישור אליאקספרס
+        if (enabled && (match.rule.isAliExpress || finalUrl.includes('aliexpress.com'))) {
+            const affiliateUrl = await aliService.convertToAffiliate(finalUrl);
+            if (affiliateUrl) {
+                finalUrl = affiliateUrl;
+            }
+        }
+
+        // שלב ד': החלפה בטקסט אם חל שינוי
+        if (finalUrl !== originalUrl) {
             const escapedUrl = originalUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            content = content.replace(new RegExp(escapedUrl, 'g'), cleanUrl);
+            content = content.replace(new RegExp(escapedUrl, 'g'), finalUrl);
             modified = true;
         }
     }

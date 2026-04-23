@@ -4,17 +4,35 @@
   "description": "מנקה קישורים שיתופיים מתוכן הפוסטים",
   "url": "",
   "library": "./library.js",
-    "hooks": [
-        {
-            "hook": "filter:post.create",
-            "method": "cleanLinks"
-        },
-        {
-            "hook": "filter:post.edit",
-            "method": "cleanLinks"
-        }
-    ],
+  "hooks": [
+    {
+      "hook": "static:app.load",
+      "method": "init"
+    },
+    {
+      "hook": "filter:admin.header.build",
+      "method": "addAdminNavigation"
+    },
+    {
+      "hook": "filter:post.create",
+      "method": "cleanLinks"
+    },
+    {
+      "hook": "filter:post.edit",
+      "method": "cleanLinks"
+    }
+  ],
+  "modules": {
+    "../admin/plugins/cline-links.js": "static/lib/admin.js"
+  },
+  "acpScripts": [
+    "static/lib/admin.js"
+  ],
+  "templates": "templates",
+  "staticDirs": {
+    "static": "static"
+  },
   "nbbpm": {
-    "compatibility": "^4.0.0"
+    "compatibility": "^2.0.0 || ^3.0.0 || ^4.0.0"
   }
 }
