@@ -14,12 +14,12 @@
       "method": "addAdminNavigation"
     },
     {
-      "hook": "filter:post.create",
-      "method": "cleanLinks"
+      "hook": "action:post.save",
+      "method": "handlePostSave"
     },
     {
-      "hook": "filter:post.edit",
-      "method": "cleanLinks"
+      "hook": "action:post.edit",
+      "method": "handlePostEdit"
     }
   ],
   "modules": {

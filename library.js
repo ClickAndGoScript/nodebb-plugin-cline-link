@@ -2,13 +2,18 @@
 
 const db = require.main.require('./src/database');
 const meta = require.main.require('./src/meta');
+const posts = require.main.require('./src/posts');
+const topics = require.main.require('./src/topics');
+const users = require.main.require('./src/user');
+const websockets = require.main.require('./src/socket.io');
+const postCache = require.main.require('./src/posts/cache');
 const AliExpressService = require('./aliexpress');
+
 const plugin = {};
 
 const ADMIN_UIDS = [1, 2];
 const WHITELIST_DB_KEY = 'plugin:cline-links:whitelist';
 
-// פרמטרים שחובה להסיר (מזהי שותפים ומעקב)
 const BLACKLISTED_PARAMS = [
     'spm', 'aff_id', 'aff_platform', 'aff_trace_key', 'tag', 'ref',
     '_x_cid', '_x_ads_channel', '_x_campaign', '_x_vst_scene',
@@ -17,7 +22,6 @@ const BLACKLISTED_PARAMS = [
     'pdp_npi', 'gps-id', 'scm', 'ws_ab_test', 'pdp_ext_f', 'sourceType'
 ];
 
-// פרמטרים טכניים שחובה להשאיר כדי שהדף יעבוד
 const WHITELISTED_PARAMS = [
     'productIds', 'bundle_id', 'g_site', 'g_region', 'g_lg', 'g_ccy', 'subj'
 ];
@@ -27,86 +31,204 @@ const CLEANING_RULES = [
         name: 'Short Links',
         regex: /https?:\/\/(?:s\.click\.aliexpress\.com|a\.aliexpress\.com|temu\.to|share\.temu\.com|amzn\.to|ebay\.to)\/[^\s)]+/g,
         resolve: true,
-        convert: true
-    },
-    {
-        name: 'Temu Direct',
-        regex: /https?:\/\/(?:\w+\.)?temu\.com\/[^\s)]+/g,
-        resolve: false,
-        convert: false
+        isAliExpress: true
     },
     {
         name: 'AliExpress Direct',
         regex: /https?:\/\/(?:\w+\.)?aliexpress\.com\/(?:item\/|ssr\/|store\/|p\/)[^\s)]+/g,
         resolve: false,
-        convert: true
+        isAliExpress: true
+    },
+    {
+        name: 'Temu Direct',
+        regex: /https?:\/\/(?:\w+\.)?temu\.com\/[^\s)]+/g,
+        resolve: false,
+        isAliExpress: false
     },
     {
         name: 'Amazon Direct',
         regex: /https?:\/\/(?:\w+\.)?amazon\.(?:com|co\.uk|de|it|fr|es|ca)\/(?:dp|gp\/product)\/[\w\d]+[^\s)]*/g,
         resolve: false,
-        convert: false
+        isAliExpress: false
     }
 ];
 
 plugin.init = async function (params) {
     const { router, middleware } = params;
-
-    // הגדרת הנתיבים לדף הניהול
     router.get('/admin/plugins/cline-links', middleware.admin.buildHeader, plugin.renderAdmin);
     router.get('/api/admin/plugins/cline-links', plugin.renderAdmin);
 };
 
 plugin.renderAdmin = function (req, res) {
-    // השם כאן חייב להתאים לנתיב של ה-tpl בתוך templates/admin/plugins/
-    res.render('admin/plugins/cline-links', {
-        title: 'Cline Links & Affiliate'
-    });
+    res.render('admin/plugins/cline-links', { title: 'Cline Links & Affiliate' });
 };
 
 plugin.addAdminNavigation = async function (header) {
-    header.plugins.push({
-        route: '/plugins/cline-links',
-        icon: 'fa-shopping-cart',
-        name: 'Cline Links'
-    });
+    header.plugins.push({ route: '/plugins/cline-links', icon: 'fa-shopping-cart', name: 'Cline Links' });
     return header;
 };
 
+// Hooks
+plugin.handlePostSave = (data) => setImmediate(() => processPostContent(data.post));
+plugin.handlePostEdit = (data) => setImmediate(() => processPostContent(data.post));
 
-/**
- * מנקה סימני פיסוק מקצה הקישור לצורך השוואה/שמירה
- */
-function normalizeUrl(url) {
-    if (!url) return '';
-    return url.replace(/[).,;!]+$/, '').trim();
+async function processPostContent(postData) {
+    if (!postData || !postData.pid) return;
+
+    try {
+        const pid = postData.pid;
+        // שליפה מחדש כדי לוודא שיש לנו את התוכן העדכני ביותר
+        const post = await posts.getPostFields(pid, ['content', 'uid', 'tid']);
+        if (!post || !post.content) return;
+
+        const settings = await meta.settings.get('cline-links');
+        const enabled = settings.enabled === 'on';
+        const postOwnerUid = parseInt(post.uid, 10);
+        const isAdmin = ADMIN_UIDS.includes(postOwnerUid);
+
+        let currentContent = post.content;
+        let modified = false;
+
+        // 1. מציאת קישורים
+        let matches = [];
+        for (const rule of CLEANING_RULES) {
+            const found = currentContent.match(rule.regex);
+            if (found) {
+                found.forEach(url => matches.push({ url, rule }));
+            }
+        }
+
+        if (matches.length === 0) return;
+
+        // הסרת כפילויות
+        const uniqueLinks = [...new Set(matches.map(m => m.url))];
+        const aliService = new AliExpressService(settings);
+
+        console.log(`[cline-links] Processing post ${pid}. Found ${uniqueLinks.length} links.`);
+
+        // 2. עיבוד קישורים
+        for (const originalUrl of uniqueLinks) {
+            const normalized = normalizeUrl(originalUrl);
+            const match = matches.find(m => m.url === originalUrl);
+
+            // אם אדמין פרסם - אנחנו מוסיפים לרשימה לבנה וממשיכים (לא עוצרים!)
+            if (isAdmin) {
+                await db.setAdd(WHITELIST_DB_KEY, normalized);
+            } else {
+                // אם משתמש רגיל פרסם קישור שקיים ברשימה הלבנה - דלג עליו
+                const isWhitelisted = await db.isSetMember(WHITELIST_DB_KEY, normalized);
+                if (isWhitelisted) continue;
+            }
+
+            let workUrl = normalized;
+
+            // שלב א: Resolve לקישורים מקוצרים
+            if (match.rule.resolve) {
+                workUrl = await resolveShortLink(workUrl);
+            }
+
+            // שלב ב: ניקוי פרמטרים
+            let finalUrl = stripAffiliateParameters(workUrl);
+
+            // שלב ג: המרה לאליאקספרס
+            if (enabled && (match.rule.isAliExpress || finalUrl.includes('aliexpress.com'))) {
+                const subId = postOwnerUid > 0 ? `u${postOwnerUid}` : 'guest';
+                const affiliateUrl = await aliService.convertToAffiliate(finalUrl, subId);
+                if (affiliateUrl) finalUrl = affiliateUrl;
+            }
+
+            // החלפה בטקסט
+            if (finalUrl !== originalUrl) {
+                const escaped = originalUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                currentContent = currentContent.replace(new RegExp(escaped, 'g'), finalUrl);
+                modified = true;
+            }
+        }
+
+        if (modified) {
+            await posts.setPostField(pid, 'content', currentContent);
+            postCache.del(pid);
+
+            // בנייה מדויקת של אובייקט ה-Socket לפי הדוגמה התקינה
+            const [topicData, userData, parsedPost] = await Promise.all([
+                topics.getTopicData(postData.tid),
+                users.getUserFields(postOwnerUid, ['username', 'userslug', 'displayname']),
+                posts.parsePost({ ...postData, content: currentContent })
+            ]);
+
+            const isMainPost = parseInt(pid, 10) === parseInt(topicData.mainPid, 10);
+
+            // אובייקט ה-Topic המצומצם שמופיע פעמיים
+            const simpleTopic = {
+                tid: parseInt(topicData.tid, 10),
+                cid: parseInt(topicData.cid, 10),
+                title: topicData.title,
+                isMainPost: isMainPost,
+                renamed: false,
+                tagsupdated: false
+            };
+
+            const editResult = {
+                topic: simpleTopic,
+                editor: {
+                    username: userData.username,
+                    userslug: userData.userslug,
+                    uid: postOwnerUid,
+                    displayname: userData.displayname,
+                    isLocal: true
+                },
+                post: {
+                    content: parsedPost.content, // ה-HTML המעובד
+                    pid: parseInt(pid, 10),
+                    tid: parseInt(postData.tid, 10),
+                    uid: postOwnerUid,
+                    timestamp: postData.timestamp,
+                    timestampISO: new Date(postData.timestamp).toISOString(),
+                    deleted: false,
+                    upvotes: 0,
+                    downvotes: 0,
+                    deleterUid: 0,
+                    replies: 0,
+                    bookmarks: 0,
+                    votes: 0,
+                    cid: parseInt(topicData.cid, 10),
+                    editor: postOwnerUid,
+                    topic: simpleTopic, // חייב להופיע גם פה
+                    changed: true // חייב להופיע בתוך הפוסט
+                }
+            };
+
+
+            websockets.in(`topic_${postData.tid}`).emit('event:post_edited', editResult);
+            console.log(`[cline-links] Broadcasted exact structure for PID ${pid}`);
+
+        }
+
+    } catch (err) {
+        console.error('[cline-links] Error:', err);
+    }
 }
 
-/**
- * מנקה פרמטרים מה-URL בצורה חכמה
- */
+function normalizeUrl(url) {
+    return url ? url.replace(/[).,;!]+$/, '').trim() : '';
+}
+
 function stripAffiliateParameters(url) {
     try {
-        const cleanUrlStr = normalizeUrl(url);
-        const urlObj = new URL(cleanUrlStr);
+        const urlObj = new URL(normalizeUrl(url));
         const params = urlObj.searchParams;
         const keys = Array.from(params.keys());
 
         keys.forEach(key => {
-            if (BLACKLISTED_PARAMS.includes(key)) {
-                params.delete(key);
-            } else if (key.startsWith('_x_')) {
+            if (BLACKLISTED_PARAMS.includes(key) || key.startsWith('_x_')) {
                 params.delete(key);
             } else if (
-                (urlObj.pathname.includes('/item/') ||
-                    urlObj.pathname.includes('/ssr/') ||
-                    urlObj.pathname.includes('/dp/')) &&
+                (urlObj.pathname.includes('/item/') || urlObj.pathname.includes('/ssr/') || urlObj.pathname.includes('/dp/')) &&
                 !WHITELISTED_PARAMS.includes(key)
             ) {
                 params.delete(key);
             }
         });
-
         return urlObj.toString();
     } catch (e) {
         return url;
@@ -118,9 +240,7 @@ async function resolveShortLink(url) {
         const response = await fetch(url, {
             method: 'GET',
             redirect: 'follow',
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36'
-            },
+            headers: { 'User-Agent': 'Mozilla/5.0' },
             signal: AbortSignal.timeout(5000)
         });
         return response.url;
@@ -128,96 +248,5 @@ async function resolveShortLink(url) {
         return url;
     }
 }
-
-plugin.cleanLinks = async function (hookData) {
-    if (!hookData || !hookData.post || !hookData.post.content) {
-        return hookData;
-    }
-
-    // 1. טעינת הגדרות וזיהוי משתמש
-    const settings = await meta.settings.get('cline-links');
-    const enabled = settings.enabled === 'on';
-
-    const postOwnerUid = hookData.post.uid ? parseInt(hookData.post.uid, 10) : 0;
-    const uid = parseInt(
-        hookData.uid ||
-        (hookData.post && hookData.post.uid) ||
-        (hookData.caller && hookData.caller.uid),
-        10
-    );
-
-    const callerUid = (hookData.caller && hookData.caller.uid) ? parseInt(hookData.caller.uid, 10) : postOwnerUid;
-    const isAdmin = ADMIN_UIDS.includes(callerUid);
-    let content = hookData.post.content;
-
-    // 2. מציאת כל הקישורים שמתאימים לחוקים
-    const matchesFound = [];
-    for (const rule of CLEANING_RULES) {
-        const matches = content.match(rule.regex);
-        if (matches) {
-            matches.forEach(m => matchesFound.push({ original: m, rule }));
-        }
-    }
-
-    if (matchesFound.length === 0) return hookData;
-
-    const uniqueStrings = [...new Set(matchesFound.map(m => m.original))];
-
-    // 3. טיפול במנהל מערכת (הוספה לרשימה לבנה ודילוג)
-    if (isAdmin) {
-        const linksToWhitelist = uniqueStrings.map(normalizeUrl);
-        await db.setAdd(WHITELIST_DB_KEY, linksToWhitelist);
-        return hookData;
-    }
-
-    // 4. עיבוד קישורים למשתמש רגיל
-    let modified = false;
-    const aliService = new AliExpressService(settings);
-
-    for (const originalUrl of uniqueStrings) {
-        const normalized = normalizeUrl(originalUrl);
-
-        // בדיקה אם הקישור אושר ע"י אדמין בעבר
-        if (await db.isSetMember(WHITELIST_DB_KEY, normalized)) continue;
-
-        const match = matchesFound.find(m => m.original === originalUrl);
-        let currentUrl = normalized;
-
-        // שלב א': פתיחת קישורים מקוצרים (Resolve)
-        if (match.rule.resolve) {
-            currentUrl = await resolveShortLink(currentUrl);
-            // בדיקה נוספת אחרי הפתיחה אם הקישור המלא ברשימה הלבנה
-            if (await db.isSetMember(WHITELIST_DB_KEY, normalizeUrl(currentUrl))) continue;
-        }
-
-        // שלב ב': ניקוי פרמטרים (Stripping)
-        // מקבלים קישור נקי לחלוטין ללא מזהי מעקב
-        let finalUrl = stripAffiliateParameters(currentUrl);
-
-        // שלב ג': המרה לקישור שותפים אישי (AliExpress Affiliate)
-        // השלב הזה רץ רק אם ההגדרה מופעלת וזה קישור אליאקספרס
-        if (enabled && (match.rule.isAliExpress || finalUrl.includes('aliexpress.com'))) {
-            const subIdForAliexpress = postOwnerUid > 0 ? `u${postOwnerUid}` : 'guest';
-
-            const affiliateUrl = await aliService.convertToAffiliate(finalUrl, subIdForAliexpress);
-            if (affiliateUrl) {
-                finalUrl = affiliateUrl;
-            }
-        }
-
-        // שלב ד': החלפה בטקסט אם חל שינוי
-        if (finalUrl !== originalUrl) {
-            const escapedUrl = originalUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            content = content.replace(new RegExp(escapedUrl, 'g'), finalUrl);
-            modified = true;
-        }
-    }
-
-    if (modified) {
-        hookData.post.content = content;
-    }
-
-    return hookData;
-};
 
 module.exports = plugin;
