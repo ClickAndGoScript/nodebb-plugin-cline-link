@@ -6,7 +6,6 @@ const posts = require.main.require('./src/posts');
 const topics = require.main.require('./src/topics');
 const users = require.main.require('./src/user');
 const websockets = require.main.require('./src/socket.io');
-const postCache = require.main.require('./src/posts/cache');
 const AliExpressService = require('./aliexpress');
 
 const plugin = {};
@@ -167,8 +166,12 @@ async function processPostContent(pid) {
         }
 
         if (modified) {
+            console.log(`[cline-links] 💾 saving pid=${pid}, new content preview:`, currentContent.substring(0, 300));
             await posts.setPostField(pid, 'content', currentContent);
-            postCache.del(pid);
+            await posts.clearCachedPost(pid);
+
+            const verifyData = await posts.getPostData(pid);
+            console.log(`[cline-links] ✅ verify after save pid=${pid}, stored content preview:`, verifyData?.content?.substring(0, 300));
 
             // בנייה מדויקת של אובייקט ה-Socket לפי הדוגמה התקינה
             const [topicData, userData, parsedPost] = await Promise.all([
