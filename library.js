@@ -69,75 +69,69 @@ plugin.addAdminNavigation = async function (header) {
 };
 
 // Hooks
-plugin.handlePostSave = (data) => setImmediate(() => processPostContent(data.post));
-plugin.handlePostEdit = (data) => setImmediate(() => processPostContent(data.post));
+plugin.handlePostSave = (data) => data?.post?.pid && setImmediate(() => processPostContent(data.post.pid));
+plugin.handlePostEdit = (data) => data?.post?.pid && setImmediate(() => processPostContent(data.post.pid));
 
-async function processPostContent(postData) {
-    if (!postData || !postData.pid) return;
-
+async function processPostContent(pid) {
     try {
-        const pid = postData.pid;
-        // שליפה מחדש כדי לוודא שיש לנו את התוכן העדכני ביותר
-        const post = await posts.getPostFields(pid, ['content', 'uid', 'tid']);
-        if (!post || !post.content) return;
+        const postData = await posts.getPostData(pid);
+        if (!postData || !postData.content) return;
 
         const settings = await meta.settings.get('cline-links');
         const enabled = settings.enabled === 'on';
-        const postOwnerUid = parseInt(post.uid, 10);
-        const isAdmin = ADMIN_UIDS.includes(postOwnerUid);
+        const postOwnerUid = parseInt(postData.uid, 10);
 
-        let currentContent = post.content;
+        let currentContent = postData.content;
         let modified = false;
 
-        // 1. מציאת קישורים
         let matches = [];
         for (const rule of CLEANING_RULES) {
             const found = currentContent.match(rule.regex);
-            if (found) {
-                found.forEach(url => matches.push({ url, rule }));
-            }
+            if (found) found.forEach(url => matches.push({ url, rule }));
         }
 
         if (matches.length === 0) return;
 
-        // הסרת כפילויות
         const uniqueLinks = [...new Set(matches.map(m => m.url))];
         const aliService = new AliExpressService(settings);
 
-        console.log(`[cline-links] Processing post ${pid}. Found ${uniqueLinks.length} links.`);
-
-        // 2. עיבוד קישורים
         for (const originalUrl of uniqueLinks) {
-            const normalized = normalizeUrl(originalUrl);
-            const match = matches.find(m => m.url === originalUrl);
+            const normalizedOriginal = normalizeUrl(originalUrl);
 
-            // אם אדמין פרסם - אנחנו מוסיפים לרשימה לבנה וממשיכים (לא עוצרים!)
-            if (isAdmin) {
-                await db.setAdd(WHITELIST_DB_KEY, normalized);
-            } else {
-                // אם משתמש רגיל פרסם קישור שקיים ברשימה הלבנה - דלג עליו
-                const isWhitelisted = await db.isSetMember(WHITELIST_DB_KEY, normalized);
-                if (isWhitelisted) continue;
+            // בדיקה: האם הקישור הזה הוא כבר קישור "מוסכם" (הומר בעבר ע"י הפורום)
+            if (await db.isSetMember(WHITELIST_DB_KEY, normalizedOriginal)) {
+                continue;
             }
 
-            let workUrl = normalized;
+            const match = matches.find(m => m.url === originalUrl);
+            let workUrl = normalizedOriginal;
+            let wasConverted = false;
 
-            // שלב א: Resolve לקישורים מקוצרים
+            // 1. Resolve (רק אם לא מולבן)
             if (match.rule.resolve) {
                 workUrl = await resolveShortLink(workUrl);
             }
 
-            // שלב ב: ניקוי פרמטרים
+            // 2. Strip Parameters
             let finalUrl = stripAffiliateParameters(workUrl);
 
-            // שלב ג: המרה לאליאקספרס
+            // 3. AliExpress API Conversion
             if (enabled && (match.rule.isAliExpress || finalUrl.includes('aliexpress.com'))) {
                 const subId = postOwnerUid > 0 ? `u${postOwnerUid}` : 'guest';
                 const affiliateUrl = await aliService.convertToAffiliate(finalUrl, subId);
-                if (affiliateUrl) finalUrl = affiliateUrl;
+                if (affiliateUrl) {
+                    finalUrl = affiliateUrl;
+                    wasConverted = true;
+                }
             }
 
-            // החלפה בטקסט
+            // 4. הלבנה: אנחנו שומרים את התוצאה הסופית ברשימה הלבנה
+            // אם זה קישור מקוצר (s.click) שנוצר עכשיו, הוא לא יעובד שוב לעולם.
+            if (wasConverted || match.rule.resolve) {
+                await db.setAdd(WHITELIST_DB_KEY, normalizeUrl(finalUrl));
+            }
+
+            // 5. החלפה
             if (finalUrl !== originalUrl) {
                 const escaped = originalUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
                 currentContent = currentContent.replace(new RegExp(escaped, 'g'), finalUrl);
@@ -200,7 +194,6 @@ async function processPostContent(postData) {
 
 
             websockets.in(`topic_${postData.tid}`).emit('event:post_edited', editResult);
-            console.log(`[cline-links] Broadcasted exact structure for PID ${pid}`);
 
         }
 
