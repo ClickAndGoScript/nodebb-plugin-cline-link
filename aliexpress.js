@@ -21,7 +21,7 @@ class AliExpressService {
         return crypto.createHash('md5').update(basestring, 'utf8').digest('hex').toUpperCase();
     }
 
-    async convertToAffiliate(sourceUrl) {
+    async convertToAffiliate(sourceUrl, subId) {
         if (!this.appKey || !this.appSecret) return null;
 
         const timestamp = new Date().toISOString().replace(/T/, ' ').replace(/\..+/, '');
@@ -36,6 +36,10 @@ class AliExpressService {
             promotion_link_type: '0',
             source_values: sourceUrl
         };
+
+        if (subId) {
+            params.sub_id = subId.toString();
+        }
 
         params.sign = this.generateSignature(params);
 

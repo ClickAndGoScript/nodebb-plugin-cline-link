@@ -137,15 +137,17 @@ plugin.cleanLinks = async function (hookData) {
     // 1. טעינת הגדרות וזיהוי משתמש
     const settings = await meta.settings.get('cline-links');
     const enabled = settings.enabled === 'on';
-    
+
+    const postOwnerUid = hookData.post.uid ? parseInt(hookData.post.uid, 10) : 0;
     const uid = parseInt(
-        hookData.uid || 
-        (hookData.post && hookData.post.uid) || 
-        (hookData.caller && hookData.caller.uid), 
+        hookData.uid ||
+        (hookData.post && hookData.post.uid) ||
+        (hookData.caller && hookData.caller.uid),
         10
     );
 
-    const isAdmin = ADMIN_UIDS.includes(uid);
+    const callerUid = (hookData.caller && hookData.caller.uid) ? parseInt(hookData.caller.uid, 10) : postOwnerUid;
+    const isAdmin = ADMIN_UIDS.includes(callerUid);
     let content = hookData.post.content;
 
     // 2. מציאת כל הקישורים שמתאימים לחוקים
@@ -195,7 +197,9 @@ plugin.cleanLinks = async function (hookData) {
         // שלב ג': המרה לקישור שותפים אישי (AliExpress Affiliate)
         // השלב הזה רץ רק אם ההגדרה מופעלת וזה קישור אליאקספרס
         if (enabled && (match.rule.isAliExpress || finalUrl.includes('aliexpress.com'))) {
-            const affiliateUrl = await aliService.convertToAffiliate(finalUrl);
+            const subIdForAliexpress = postOwnerUid > 0 ? `u${postOwnerUid}` : 'guest';
+
+            const affiliateUrl = await aliService.convertToAffiliate(finalUrl, subIdForAliexpress);
             if (affiliateUrl) {
                 finalUrl = affiliateUrl;
             }
