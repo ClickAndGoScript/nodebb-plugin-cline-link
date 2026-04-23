@@ -100,6 +100,7 @@ async function processPostContent(pid) {
 
             // בדיקה: האם הקישור הזה הוא כבר קישור "מוסכם" (הומר בעבר ע"י הפורום)
             if (await db.isSetMember(WHITELIST_DB_KEY, normalizedOriginal)) {
+                console.log(`[cline-links] Whitelist hit: skipping ${normalizedOriginal}`);
                 continue;
             }
 
@@ -194,6 +195,7 @@ async function processPostContent(pid) {
 
 
             websockets.in(`topic_${postData.tid}`).emit('event:post_edited', editResult);
+            console.log(`[cline-links] Broadcasted exact structure for PID ${pid}`);
 
         }
 
