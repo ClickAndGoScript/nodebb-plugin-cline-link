@@ -14,12 +14,24 @@
       "method": "addAdminNavigation"
     },
     {
+      "hook": "filter:post.create",
+      "method": "handlePostFilter"
+    },
+    {
+      "hook": "filter:post.edit",
+      "method": "handlePostFilter"
+    },
+    {
       "hook": "action:post.save",
       "method": "handlePostSave"
     },
     {
       "hook": "action:post.edit",
       "method": "handlePostEdit"
+    },
+    {
+      "hook": "filter:email.params",
+      "method": "handleEmailParams"
     }
   ],
   "modules": {
