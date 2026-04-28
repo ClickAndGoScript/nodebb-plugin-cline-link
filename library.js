@@ -190,18 +190,20 @@ async function waitForState(pid) {
     return await getState(pid); // נחזיר את מה שיש, גם אם עדיין pending
 }
 
-plugin.handleEmailParams = async (params) => {
-    console.log(params)
+plugin.handleEmailParams = async (data) => {
     try {
-        const pid = parseInt(params?.pid ?? params?.notification?.pid, 10);
-        if (!pid) return params;
+        // ה-hook מקבל מעטפת: { template, email, language, params, caller }.
+        // הפרמטרים האמיתיים של התבנית נמצאים ב-data.params.
+        const inner = data?.params || {};
+        const pid = parseInt(inner.pid ?? inner.notification?.pid, 10);
+        if (!pid) return data;
 
         const state = await waitForState(pid);
         // 'clean' או null/לא-מסומן → אין מה להחליף, יוצאים מיד (קריאת DB אחת).
-        if (state !== 'modified') return params;
+        if (state !== 'modified') return data;
 
         const replacements = await getReplacements(pid);
-        if (!replacements || replacements.size === 0) return params;
+        if (!replacements || replacements.size === 0) return data;
 
         const apply = (text) => {
             if (typeof text !== 'string' || !text) return text;
@@ -214,17 +216,19 @@ plugin.handleEmailParams = async (params) => {
             return out;
         };
 
-        if (params.body) params.body = apply(params.body);
-        if (params.intro) params.intro = apply(params.intro);
-        if (params.notification) {
-            if (params.notification.bodyShort) params.notification.bodyShort = apply(params.notification.bodyShort);
-            if (params.notification.bodyLong) params.notification.bodyLong = apply(params.notification.bodyLong);
-            if (params.notification.bodyEmail) params.notification.bodyEmail = apply(params.notification.bodyEmail);
+        if (inner.body) inner.body = apply(inner.body);
+        if (inner.intro) inner.intro = apply(inner.intro);
+        if (inner.subject) inner.subject = apply(inner.subject);
+        if (inner.notification) {
+            if (inner.notification.bodyShort) inner.notification.bodyShort = apply(inner.notification.bodyShort);
+            if (inner.notification.bodyLong) inner.notification.bodyLong = apply(inner.notification.bodyLong);
+            if (inner.notification.bodyEmail) inner.notification.bodyEmail = apply(inner.notification.bodyEmail);
+            if (inner.notification.subject) inner.notification.subject = apply(inner.notification.subject);
         }
     } catch (err) {
         console.error('[cline-links] handleEmailParams error:', err);
     }
-    return params;
+    return data;
 };
 
 async function processPostContent(pid) {
