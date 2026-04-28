@@ -38,25 +38,25 @@ const WHITELISTED_PARAMS = [
 const CLEANING_RULES = [
     {
         name: 'Short Links',
-        regex: /https?:\/\/(?:s\.click\.aliexpress\.com|a\.aliexpress\.com|temu\.to|share\.temu\.com|amzn\.to|ebay\.to)\/[^\s)]+/g,
+        regex: /(?:https?:\/\/)?(?:s\.click\.aliexpress\.com|a\.aliexpress\.com|temu\.to|share\.temu\.com|amzn\.to|ebay\.to)\/[^\s)]+/g,
         resolve: true,
         isAliExpress: true
     },
     {
         name: 'AliExpress Direct',
-        regex: /https?:\/\/(?:\w+\.)?aliexpress\.com\/(?:item\/|ssr\/|store\/|p\/)[^\s)]+/g,
+        regex: /(?:https?:\/\/)?(?:\w+\.)?aliexpress\.com\/(?:item\/|ssr\/|store\/|p\/)[^\s)]+/g,
         resolve: false,
         isAliExpress: true
     },
     {
         name: 'Temu Direct',
-        regex: /https?:\/\/(?:\w+\.)?temu\.com\/[^\s)]+/g,
+        regex: /(?:https?:\/\/)?(?:\w+\.)?temu\.com\/[^\s)]+/g,
         resolve: false,
         isAliExpress: false
     },
     {
         name: 'Amazon Direct',
-        regex: /https?:\/\/(?:\w+\.)?amazon\.(?:com|co\.uk|de|it|fr|es|ca)\/(?:dp|gp\/product)\/[\w\d]+[^\s)]*/g,
+        regex: /(?:https?:\/\/)?(?:\w+\.)?amazon\.(?:com|co\.uk|de|it|fr|es|ca)\/(?:dp|gp\/product)\/[\w\d]+[^\s)]*/g,
         resolve: false,
         isAliExpress: false
     }
@@ -390,7 +390,12 @@ async function processPostContent(pid) {
 }
 
 function normalizeUrl(url) {
-    return url ? url.replace(/[).,;!]+$/, '').trim() : '';
+    if (!url) return '';
+    let cleaned = url.replace(/[).,;!]+$/, '').trim();
+    if (!/^https?:\/\//i.test(cleaned)) {
+        cleaned = 'https://' + cleaned;
+    }
+    return cleaned;
 }
 
 function stripAffiliateParameters(url) {
