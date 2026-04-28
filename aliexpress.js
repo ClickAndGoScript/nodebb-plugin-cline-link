@@ -9,7 +9,7 @@ class AliExpressService {
         this.appSecret = (config.appSecret || '').trim();
         this.trackingId = (config.trackingId || '').trim();
         this.endpoint = 'https://api-sg.aliexpress.com/sync';
-        console.log(`[AliExpress] init appKey="${this.appKey}" (len=${this.appKey.length}), secretLen=${this.appSecret.length}, trackingId="${this.trackingId}"`);
+        // console.log(`[AliExpress] init appKey="${this.appKey}" (len=${this.appKey.length}), secretLen=${this.appSecret.length}, trackingId="${this.trackingId}"`);
     }
 
     generateSignature(params) {
@@ -48,14 +48,14 @@ class AliExpressService {
             const data = new URLSearchParams();
             for (const key in params) data.append(key, params[key]);
 
-            console.log('[AliExpress] 📤 request params:', JSON.stringify({ ...params, sign: params.sign.substring(0, 8) + '...' }));
+            // console.log('[AliExpress] 📤 request params:', JSON.stringify({ ...params, sign: params.sign.substring(0, 8) + '...' }));
 
             const response = await axios.post(this.endpoint, data.toString(), {
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8' },
                 timeout: 5000
             });
 
-            console.log('[AliExpress] 📥 full response:', JSON.stringify(response.data));
+            // console.log('[AliExpress] 📥 full response:', JSON.stringify(response.data));
 
             const respBody = response.data.aliexpress_affiliate_link_generate_response;
             if (respBody?.resp_result?.resp_code && respBody.resp_result.resp_code !== 200) {

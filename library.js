@@ -63,7 +63,7 @@ const CLEANING_RULES = [
 ];
 
 plugin.init = async function (params) {
-    console.log('[cline-links] ✅ Plugin init() called - hooks should be registered');
+    // console.log('[cline-links] ✅ Plugin init() called - hooks should be registered');
     const { router, middleware } = params;
     router.get('/admin/plugins/cline-links', middleware.admin.buildHeader, plugin.renderAdmin);
     router.get('/api/admin/plugins/cline-links', plugin.renderAdmin);
@@ -74,7 +74,7 @@ plugin.init = async function (params) {
     try {
         const stuckPids = await db.getSetMembers(PENDING_INDEX_KEY);
         if (stuckPids && stuckPids.length) {
-            console.log(`[cline-links] 🧹 cleaning up ${stuckPids.length} stuck pending pids from previous run`);
+            // console.log(`[cline-links] 🧹 cleaning up ${stuckPids.length} stuck pending pids from previous run`);
             await Promise.all(stuckPids.map(async (pid) => {
                 await db.delete(stateKey(pid));
                 await db.setRemove(PENDING_INDEX_KEY, pid);
@@ -166,11 +166,11 @@ plugin.handlePostFilter = async (data) => {
 };
 
 plugin.handlePostSave = (data) => {
-    console.log('[cline-links] 🔔 handlePostSave fired, pid=', data?.post?.pid, 'hasContent=', !!data?.post?.content);
+    // console.log('[cline-links] 🔔 handlePostSave fired, pid=', data?.post?.pid, 'hasContent=', !!data?.post?.content);
     if (data?.post?.pid) setImmediate(() => startProcessing(data.post.pid));
 };
 plugin.handlePostEdit = (data) => {
-    console.log('[cline-links] 🔔 handlePostEdit fired, pid=', data?.post?.pid, 'hasContent=', !!data?.post?.content);
+    // console.log('[cline-links] 🔔 handlePostEdit fired, pid=', data?.post?.pid, 'hasContent=', !!data?.post?.content);
     if (data?.post?.pid) setImmediate(() => startProcessing(data.post.pid));
 };
 
@@ -232,21 +232,21 @@ plugin.handleEmailParams = async (data) => {
 };
 
 async function processPostContent(pid) {
-    console.log(`[cline-links] ▶️ processPostContent START pid=${pid}`);
+    // console.log(`[cline-links] ▶️ processPostContent START pid=${pid}`);
     const replacements = new Map();
     try {
         const postData = await posts.getPostData(pid);
         if (!postData || !postData.content) {
-            console.log(`[cline-links] ⛔ pid=${pid} no postData/content, postData=${!!postData}`);
+            // console.log(`[cline-links] ⛔ pid=${pid} no postData/content, postData=${!!postData}`);
             return { replacements };
         }
-        console.log(`[cline-links] 📄 pid=${pid} content length=${postData.content.length}, uid=${postData.uid}`);
-        console.log(`[cline-links] 📄 pid=${pid} content preview:`, postData.content.substring(0, 300));
+        // console.log(`[cline-links] 📄 pid=${pid} content length=${postData.content.length}, uid=${postData.uid}`);
+        // console.log(`[cline-links] 📄 pid=${pid} content preview:`, postData.content.substring(0, 300));
 
         const settings = await meta.settings.get('cline-links');
         const enabled = settings && settings.enabled === 'on';
         const postOwnerUid = parseInt(postData.uid, 10);
-        console.log(`[cline-links] ⚙️ settings enabled=${enabled}, raw settings=`, JSON.stringify(settings));
+        // console.log(`[cline-links] ⚙️ settings enabled=${enabled}, raw settings=`, JSON.stringify(settings));
 
         let currentContent = postData.content;
         let modified = false;
@@ -254,26 +254,26 @@ async function processPostContent(pid) {
         let matches = [];
         for (const rule of CLEANING_RULES) {
             const found = currentContent.match(rule.regex);
-            console.log(`[cline-links] 🔍 rule "${rule.name}" matches=${found ? found.length : 0}`);
+            // console.log(`[cline-links] 🔍 rule "${rule.name}" matches=${found ? found.length : 0}`);
             if (found) found.forEach(url => matches.push({ url, rule }));
         }
 
         if (matches.length === 0) {
-            console.log(`[cline-links] ⛔ pid=${pid} no matching URLs found, returning`);
+            // console.log(`[cline-links] ⛔ pid=${pid} no matching URLs found, returning`);
             return { replacements };
         }
-        console.log(`[cline-links] ✅ pid=${pid} total matches=${matches.length}`);
+        // console.log(`[cline-links] ✅ pid=${pid} total matches=${matches.length}`);
 
         const uniqueLinks = [...new Set(matches.map(m => m.url))];
         const aliService = new AliExpressService(settings);
 
         for (const originalUrl of uniqueLinks) {
             const normalizedOriginal = normalizeUrl(originalUrl);
-            console.log(`[cline-links] 🔗 processing URL: ${normalizedOriginal}`);
+            // console.log(`[cline-links] 🔗 processing URL: ${normalizedOriginal}`);
 
             // בדיקה: האם הקישור הזה הוא כבר קישור "מוסכם" (הומר בעבר ע"י הפורום)
             if (await db.isSetMember(WHITELIST_DB_KEY, normalizedOriginal)) {
-                console.log(`[cline-links] Whitelist hit: skipping ${normalizedOriginal}`);
+                // console.log(`[cline-links] Whitelist hit: skipping ${normalizedOriginal}`);
                 continue;
             }
 
@@ -284,25 +284,25 @@ async function processPostContent(pid) {
             // 1. Resolve (רק אם לא מולבן)
             if (match.rule.resolve) {
                 workUrl = await resolveShortLink(workUrl);
-                console.log(`[cline-links] 🔁 resolved to: ${workUrl}`);
+                // console.log(`[cline-links] 🔁 resolved to: ${workUrl}`);
             }
 
             // 2. Strip Parameters
             let finalUrl = stripAffiliateParameters(workUrl);
-            console.log(`[cline-links] 🧹 after strip: ${finalUrl}`);
+            // console.log(`[cline-links] 🧹 after strip: ${finalUrl}`);
 
             // 3. AliExpress API Conversion
             if (enabled && (match.rule.isAliExpress || finalUrl.includes('aliexpress.com'))) {
                 const subId = postOwnerUid > 0 ? `u${postOwnerUid}` : 'guest';
-                console.log(`[cline-links] 💱 calling AliExpress API, subId=${subId}, url=${finalUrl}`);
+                // console.log(`[cline-links] 💱 calling AliExpress API, subId=${subId}, url=${finalUrl}`);
                 const affiliateUrl = await aliService.convertToAffiliate(finalUrl, subId);
-                console.log(`[cline-links] 💱 API returned: ${affiliateUrl}`);
+                // console.log(`[cline-links] 💱 API returned: ${affiliateUrl}`);
                 if (affiliateUrl) {
                     finalUrl = affiliateUrl;
                     wasConverted = true;
                 }
             } else {
-                console.log(`[cline-links] ⏭️ skipping AliExpress conversion (enabled=${enabled}, isAli=${match.rule.isAliExpress}, containsAli=${finalUrl.includes('aliexpress.com')})`);
+                // console.log(`[cline-links] ⏭️ skipping AliExpress conversion (enabled=${enabled}, isAli=${match.rule.isAliExpress}, containsAli=${finalUrl.includes('aliexpress.com')})`);
             }
 
             // 4. הלבנה: אנחנו שומרים את התוצאה הסופית ברשימה הלבנה
@@ -321,12 +321,12 @@ async function processPostContent(pid) {
         }
 
         if (modified) {
-            console.log(`[cline-links] 💾 saving pid=${pid}, new content preview:`, currentContent.substring(0, 300));
+            // console.log(`[cline-links] 💾 saving pid=${pid}, new content preview:`, currentContent.substring(0, 300));
             await posts.setPostField(pid, 'content', currentContent);
             await posts.clearCachedPost(pid);
 
             const verifyData = await posts.getPostData(pid);
-            console.log(`[cline-links] ✅ verify after save pid=${pid}, stored content preview:`, verifyData?.content?.substring(0, 300));
+            // console.log(`[cline-links] ✅ verify after save pid=${pid}, stored content preview:`, verifyData?.content?.substring(0, 300));
 
             // בנייה מדויקת של אובייקט ה-Socket לפי הדוגמה התקינה
             const [topicData, userData, parsedPost] = await Promise.all([
@@ -379,7 +379,7 @@ async function processPostContent(pid) {
 
 
             websockets.in(`topic_${postData.tid}`).emit('event:post_edited', editResult);
-            console.log(`[cline-links] Broadcasted exact structure for PID ${pid}`);
+            // console.log(`[cline-links] Broadcasted exact structure for PID ${pid}`);
 
         }
 
