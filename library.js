@@ -276,7 +276,17 @@ async function processMessageContent(message) {
         if (!result.modified) return { replacements };
         for (const [orig, final] of result.replacements) replacements.set(orig, final);
 
-        await messaging.editMessage(message.fromuid, message.mid, message.roomId, result.content);
+        // לא משתמשים ב-messaging.editMessage: הפונקציה הזו תמיד מסמנת את
+        // ההודעה כ"נערכה" (שדה edited), כי היא נועדה לעריכה יזומה ע"י המשתמש.
+        // כדי שההודעה תישאר בלי תג "נערך" אחרי ניקוי הקישורים - בדיוק כמו
+        // שפוסטים לא מסומנים כערוכים אחרי אותו תהליך - כותבים את השדה ישירות
+        // ומשדרים את אירוע ה-Socket בעצמנו, באותו פורמט של messaging.editMessage.
+        await messaging.setMessageField(message.mid, 'content', result.content);
+        const messages = await messaging.getMessagesData([message.mid], message.fromuid, message.roomId, true);
+        if (messages[0]) {
+            const roomName = messages[0].deleted ? `uid_${message.fromuid}` : `chat_room_${message.roomId}`;
+            websockets.in(roomName).emit('event:chats.edit', { messages });
+        }
     } catch (err) {
         console.error('[cline-links] processMessageContent error:', err);
     }
