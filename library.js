@@ -345,13 +345,23 @@ plugin.handleEmailParams = async (data) => {
 
         if (!replacements || replacements.size === 0) return data;
 
+        // תוכן הצ'אט (וכן bodyLong של פוסטים) מגיע למייל אחרי רינדור markdown
+        // (linkify), שמברח & ל-&amp; בתוך הקישור המוצג/href. לכן מנסים גם
+        // את הגרסה המבורחת של המפתח/הערך, בנוסף לגרסה הגולמית.
+        const escapeAmp = (str) => str.replace(/&/g, '&amp;');
+
         const apply = (text) => {
             if (typeof text !== 'string' || !text) return text;
             let out = text;
             for (const [orig, final] of replacements) {
                 if (orig === final) continue;
-                const escaped = orig.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                out = out.replace(new RegExp(escaped, 'g'), final);
+                const pairs = [[orig, final]];
+                const escOrig = escapeAmp(orig);
+                if (escOrig !== orig) pairs.push([escOrig, escapeAmp(final)]);
+                for (const [from, to] of pairs) {
+                    const escapedRegex = from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    out = out.replace(new RegExp(escapedRegex, 'g'), to);
+                }
             }
             return out;
         };
