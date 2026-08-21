@@ -366,26 +366,37 @@ plugin.handleEmailParams = async (data) => {
         const apply = (text) => {
             if (typeof text !== 'string' || !text) return text;
             let out = text;
+
+            // 1. תגיות <a href="...">טקסט</a>: הרינדור עלול לשנות עוד תווים
+            // בקידוד מעבר ל-& -> &amp; (למשל "?" חריג שהופך ל-%3F) - התאמה
+            // מדויקת של המחרוזת לא תמיד תספיק. משווים את ה-href ואת הטקסט
+            // המוצג לפי משמעות (decodeURIComponent מלא + ביטול HTML-entities
+            // בשני הצדדים), ורק במקרה של התאמה דורסים את שניהם לקישור הסופי -
+            // כדי לא לגעת בטקסט מותאם-אישית שכתב המשתמש (סינטקס [טקסט](url)).
+            out = out.replace(/<a\b([^>]*)href="([^"]*)"([^>]*)>([\s\S]*?)<\/a>/g, (match, before, href, after, innerText) => {
+                const normHref = normalizeForCompare(href);
+                for (const [orig, final] of replacements) {
+                    if (orig === final || normHref !== normalizeForCompare(orig)) continue;
+                    const escFinal = escapeAmp(final);
+                    const newInner = normalizeForCompare(innerText) === normalizeForCompare(orig) ? escFinal : innerText;
+                    return `<a${before}href="${escFinal}"${after}>${newInner}</a>`;
+                }
+                return match;
+            });
+
+            // 2. טקסט רגיל (מחוץ לתגיות <a>) - למשל subject/intro, או קישור
+            // שלא עבר autolink: החלפה ישירה, כולל ניסיון עם & מבורח ל-&amp;.
             for (const [orig, final] of replacements) {
                 if (orig === final) continue;
-
                 const escOrig = escapeAmp(orig);
-                const escFinal = escapeAmp(final);
                 const pairs = [[orig, final]];
-                if (escOrig !== orig) pairs.push([escOrig, escFinal]);
+                if (escOrig !== orig) pairs.push([escOrig, escapeAmp(final)]);
                 for (const [from, to] of pairs) {
                     const escapedRegex = from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
                     out = out.replace(new RegExp(escapedRegex, 'g'), to);
                 }
-
-                // אם הטקסט המוצג בתוך תגית <a> הוא בעצם הקישור המקורי (בכל צורת
-                // קידוד), דורסים אותו לקישור הסופי - אבל רק אז, כדי לא לגעת
-                // בטקסט מותאם-אישית שכתב המשתמש (סינטקס [טקסט](url) ב-markdown).
-                const normOrig = normalizeForCompare(orig);
-                out = out.replace(/<a\b([^>]*)>([\s\S]*?)<\/a>/g, (match, attrs, innerText) => (
-                    normalizeForCompare(innerText) === normOrig ? `<a${attrs}>${escFinal}</a>` : match
-                ));
             }
+
             return out;
         };
 
