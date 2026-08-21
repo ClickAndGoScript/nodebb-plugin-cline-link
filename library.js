@@ -415,6 +415,23 @@ plugin.handleEmailParams = async (data) => {
     return data;
 };
 
+// Tracking ID לשימוש ב-API של השותפים: אם למשתמש הוגדר Tracking ID מותאם
+// אישית ב-ACP (userOverrides), נשתמש בו במקום ה-Tracking ID הכללי של התוסף.
+function getTrackingIdForUser(ownerUid, settings) {
+    if (ownerUid > 0 && settings && settings.userOverrides) {
+        try {
+            const overrides = JSON.parse(settings.userOverrides);
+            if (Array.isArray(overrides)) {
+                const match = overrides.find(entry => parseInt(entry.uid, 10) === ownerUid);
+                if (match && match.trackingId) return match.trackingId;
+            }
+        } catch (err) {
+            console.error('[cline-links] getTrackingIdForUser parse error:', err);
+        }
+    }
+    return null;
+}
+
 // לוגיקת הזיהוי/ניקוי/המרה המשותפת לפוסטים ולהודעות צ'אט.
 async function findAndReplaceLinks(content, ownerUid, settings, aliService) {
     const replacements = new Map();
@@ -457,7 +474,8 @@ async function findAndReplaceLinks(content, ownerUid, settings, aliService) {
         // 3. AliExpress API Conversion
         if (enabled && (match.rule.isAliExpress || finalUrl.includes('aliexpress.com'))) {
             const subId = ownerUid > 0 ? `u${ownerUid}` : 'guest';
-            const affiliateUrl = await aliService.convertToAffiliate(finalUrl, subId);
+            const trackingId = getTrackingIdForUser(ownerUid, settings);
+            const affiliateUrl = await aliService.convertToAffiliate(finalUrl, subId, trackingId);
             if (affiliateUrl) {
                 finalUrl = affiliateUrl;
                 wasConverted = true;

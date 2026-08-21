@@ -22,7 +22,7 @@ class AliExpressService {
         return crypto.createHash('md5').update(basestring, 'utf8').digest('hex').toUpperCase();
     }
 
-    async convertToAffiliate(sourceUrl, subId) {
+    async convertToAffiliate(sourceUrl, subId, trackingIdOverride) {
         if (!this.appKey || !this.appSecret) return null;
 
         const timestamp = new Date().toISOString().replace(/T/, ' ').replace(/\..+/, '');
@@ -33,7 +33,7 @@ class AliExpressService {
             v: '2.0',
             sign_method: 'md5',
             timestamp: timestamp,
-            tracking_id: this.trackingId || 'api',
+            tracking_id: (trackingIdOverride || '').trim() || this.trackingId || 'api',
             promotion_link_type: '0',
             source_values: sourceUrl
         };
