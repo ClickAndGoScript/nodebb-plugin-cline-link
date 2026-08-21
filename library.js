@@ -350,18 +350,41 @@ plugin.handleEmailParams = async (data) => {
         // את הגרסה המבורחת של המפתח/הערך, בנוסף לגרסה הגולמית.
         const escapeAmp = (str) => str.replace(/&/g, '&amp;');
 
+        // ל-linkify autolink יש גם "ריכוך" קידוד חלקי של הטקסט המוצג בין תגי
+        // <a> (למשל %21 הופך ל-! בתצוגה אבל נשאר %21 ב-href) - כך שהטקסט
+        // המוצג לא בהכרח תואם מילה-במילה לגרסה הגולמית/המבורחת. decodeURIComponent
+        // מלא + ביטול HTML-entities מנרמל את שניהם לאותה מחרוזת להשוואה, בלי
+        // לנסות לשחזר את האלגוריתם המדויק של הספרייה.
+        function normalizeForCompare(str) {
+            let s = String(str)
+                .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+                .replace(/&quot;/g, '"').replace(/&#39;/g, '\'');
+            try { s = decodeURIComponent(s); } catch (_) { /* קידוד חלקי/לא תקין - משווים כמו שהוא */ }
+            return s;
+        }
+
         const apply = (text) => {
             if (typeof text !== 'string' || !text) return text;
             let out = text;
             for (const [orig, final] of replacements) {
                 if (orig === final) continue;
-                const pairs = [[orig, final]];
+
                 const escOrig = escapeAmp(orig);
-                if (escOrig !== orig) pairs.push([escOrig, escapeAmp(final)]);
+                const escFinal = escapeAmp(final);
+                const pairs = [[orig, final]];
+                if (escOrig !== orig) pairs.push([escOrig, escFinal]);
                 for (const [from, to] of pairs) {
                     const escapedRegex = from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
                     out = out.replace(new RegExp(escapedRegex, 'g'), to);
                 }
+
+                // אם הטקסט המוצג בתוך תגית <a> הוא בעצם הקישור המקורי (בכל צורת
+                // קידוד), דורסים אותו לקישור הסופי - אבל רק אז, כדי לא לגעת
+                // בטקסט מותאם-אישית שכתב המשתמש (סינטקס [טקסט](url) ב-markdown).
+                const normOrig = normalizeForCompare(orig);
+                out = out.replace(/<a\b([^>]*)>([\s\S]*?)<\/a>/g, (match, attrs, innerText) => (
+                    normalizeForCompare(innerText) === normOrig ? `<a${attrs}>${escFinal}</a>` : match
+                ));
             }
             return out;
         };
