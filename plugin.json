@@ -30,6 +30,10 @@
       "method": "handlePostEdit"
     },
     {
+      "hook": "filter:messaging.save",
+      "method": "handleMessageFilter"
+    },
+    {
       "hook": "action:messaging.save",
       "method": "handleMessageSave"
     },

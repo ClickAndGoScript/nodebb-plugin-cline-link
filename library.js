@@ -240,7 +240,22 @@ function startProcessingMessage(message) {
     return p;
 }
 
-// action:messaging.save נורה אחרי שההודעה כבר נשמרה.
+// filter:messaging.save רץ *לפני* שההודעה נשמרת, ו-NodeBB ממתין לו (await).
+// מסמנים pending כאן - בדיוק כמו handlePostFilter אצל פוסטים - כדי שכשה-email
+// hook (שנשלף מ-notifyUsersInRoom, שרץ מיד אחרי שההודעה נשמרת) יבדוק, הסימון
+// יהיה כבר ב-DB. בלי זה יש חלון-זמן שבו ההודעה נשמרה אבל אנחנו עדיין לא סימנו
+// pending (כי action:messaging.save+setImmediate רצים אחרי), וה-email "מפספס"
+// את ההמתנה ומקבל את הקישור הגולמי.
+plugin.handleMessageFilter = async (message) => {
+    if (message?.mid && message?.roomId) {
+        try { await markMessagePending(message.roomId, message.mid); }
+        catch (err) { console.error('[cline-links] markMessagePending (filter) error:', err); }
+    }
+    return message;
+};
+
+// action:messaging.save נורה אחרי שההודעה כבר נשמרה - כאן מריצים את העיבוד
+// הכבד (resolve/API) ברקע, בלי לחסום את שליחת ההודעה.
 plugin.handleMessageSave = (data) => {
     const message = data?.message;
     if (message?.mid && message?.roomId) {
